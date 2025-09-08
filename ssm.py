@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from icecream import ic
 from p_scan import pscan
 
 
@@ -21,14 +21,15 @@ def selective_scan(x, delta, A, B, C, D):
         torch.Tensor: Output tensor of shape (B, L, ED).
     """
 
-    _, L, _ = x.shape
+    _, L, _ = x.shape # L = 64
 
-    deltaA = torch.exp(delta.unsqueeze(-1) * A)  # (B, L, ED, N)
-    deltaB = delta.unsqueeze(-1) * B.unsqueeze(2)  # (B, L, ED, N)
+    deltaA = torch.exp(delta.unsqueeze(-1) * A)  # (1,64,256,256)
+    deltaB = delta.unsqueeze(-1) * B.unsqueeze(2)  # (1,64,256,256)
 
-    BX = deltaB * x.unsqueeze(-1)  # (B, L, ED, N)
+    BX = deltaB * x.unsqueeze(-1)  # (1,64,256,256)
 
-    hs = pscan(deltaA, BX)
+
+    hs = pscan(deltaA, BX) #(1,64,256,256)
 
     y = (
         hs @ C.unsqueeze(-1)
@@ -101,15 +102,15 @@ class SSM(nn.Module):
 
         """
         super().__init__()
-        self.dt_rank = dt_rank
-        self.dim_inner = dim_inner
-        self.d_state = d_state
+        self.dt_rank = dt_rank # 8
+        self.dim_inner = dim_inner # 256
+        self.d_state = d_state # 256
 
         # Linear layer expecting 'in_features' as the input size
         self.deltaBC_layer = nn.Linear(
             in_features, dt_rank + 2 * d_state, bias=False
-        )
-        self.dt_proj_layer = nn.Linear(dt_rank, dim_inner, bias=True)
+        ) # (256, 8 + 2*256) = (256, 520)
+        self.dt_proj_layer = nn.Linear(dt_rank, dim_inner, bias=True) # (8, 256)
 
         # Defining A_log and D as parameters
         self.A_log = nn.Parameter(
@@ -133,17 +134,17 @@ class SSM(nn.Module):
             torch.Tensor: The output tensor.
 
         """
-        A = -torch.exp(self.A_log.float())
-        D = self.D.float()
-
-        deltaBC = self.deltaBC_layer(x)
+        A = -torch.exp(self.A_log.float()) # [256,256]
+        D = self.D.float() # [256]
+        deltaBC = self.deltaBC_layer(x) # [1, 64, 520]
         delta, B, C = torch.split(
             deltaBC, [self.dt_rank, self.d_state, self.d_state], dim=-1
-        )
-        delta = F.softplus(self.dt_proj_layer(delta))
+        ) # delta: [1, 64, 8], B: [1, 64, 256], C: [1, 64, 256]
+        delta = F.softplus(self.dt_proj_layer(delta)) # [1, 64, 256]
 
         # Assuming selective_scan and selective_scan_seq are defined functions
         if pscan:
+            # A: [256,256], B: [1, 64, 256], C: [1, 64, 256], D: [256], delta: [1, 64, 256]
             y = selective_scan(x, delta, A, B, C, D)
         else:
             y = selective_scan_seq(x, delta, A, B, C, D)
@@ -152,6 +153,6 @@ class SSM(nn.Module):
     
 
 # x = torch.randn(1, 64, 256)
-# model = SSM(in_features=256, dt_rank=16, dim_inner=64, d_state=32)
+# model = SSM(in_features=256, dt_rank=8, dim_inner=256, d_state=256)
 # out = model(x)
-# print(out.shape)
+
